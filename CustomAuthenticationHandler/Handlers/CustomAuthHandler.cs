@@ -20,10 +20,38 @@ public class CustomAuthHandler : AuthenticationHandler<JwtBearerOptions>
 
         var identity = new ClaimsIdentity(token.Claims, Scheme.Name);
         var principal = new GenericPrincipal(identity, null);
-        var ticket = new AuthenticationTicket(principal, Scheme.Name);
-        return AuthenticateResult.Success(ticket);
+        var tokenValidatedContext = new TokenValidatedContext(Context, Scheme, Options)
+        {
+            Principal = principal,
+            SecurityToken = token,
+            Properties =
+            {
+                ExpiresUtc = GetSafeDateTime(token.ValidTo),
+                IssuedUtc = GetSafeDateTime(token.ValidFrom)
+            }
+        };
+
+        if (Options.SaveToken)
+        {
+            tokenValidatedContext.Properties.StoreTokens(new[]
+            {
+                new AuthenticationToken { Name = "access_token", Value = token.EncodedToken }
+            });
+        }
+
+        tokenValidatedContext.Success();
+        return tokenValidatedContext.Result;
     }
-    
+
+    private DateTimeOffset? GetSafeDateTime(DateTime dateTime)
+    {
+        if (dateTime == DateTime.MinValue)
+        {
+            return null;
+        }
+        return dateTime;
+    }
+
     [Obsolete("Obsolete")]
     public CustomAuthHandler(IOptionsMonitor<JwtBearerOptions> options, ILoggerFactory logger, UrlEncoder encoder, ISystemClock clock, TokenService tokenService) : base(options, logger, encoder, clock)
     {
