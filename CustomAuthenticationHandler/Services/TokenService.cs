@@ -11,58 +11,77 @@ public class TokenService
     private static readonly byte[] RefreshTokenKey = "V1s@=dRmc2I)zZ=1qYzrHXDRr*L)ol.iK?!Y!MKy9pZH)6w6elYG8k+9Aux2Hin0DxlMnj-4U+r!(@TqRUkJMsaLI5=nsV(dXvP+joAM1k2izbz(eNb:WH*rtWWNjbpDbKrOU9qEJ+wW=dCe!**JpUtBeM*LAk01)oH2+g:7Lx2huFAvygy__dYq:+nqv#-D#dYipB.d4aNnU9vvecs(_:@iugiv5oSyjQlkBL2C:=N??+v3iri!O9jvx@OdZI:pC/jnuXzDojnS/0ks3ENH?IPyZ?IOfEJ8FEMYgsATXaQ0mGEkEJbKo=cw/NH?9AMyACX.Mlcx(_5l2(.s0t(#8BY:2zB/*bJEp(+_#Fm_)?)j!oxXd:6(L-60f7UQGCS_9#Vr_AS*bNRQOYPN.so/My_jrK61x8yLAEbE4#??:/)DXF!.tHIom.Iz7uyQKri-=gD1Hkttr?W3yDK*-SVpmIcVnR9x?9onJHc9w6/Z=v@o7M@x0Gr#OTZ!/xjG/K3X"u8.ToArray();
     public const string AccessTokenHeader = "X-Access-Token";
     public const string RefreshTokenHeader = "X-Refresh-Token";
+    private readonly JsonWebTokenHandler _tokenHandler = new();
 
-    public async Task<(bool, JsonWebToken?)> ValidateToken(HttpContext context)
+    public async Task<string> ValidateToken(HttpContext context)
     {
-        var (isValid, validatedToken) = await ValidateAccessToken(context);
-        if (!isValid || validatedToken is null)
+        var validatedToken = await ValidateAccessToken(context);
+        if (string.IsNullOrEmpty(validatedToken))
             return await ValidateRefreshToken(context);
 
-        return (isValid, validatedToken);
+        return validatedToken;
     }
 
-    private async Task<(bool, JsonWebToken?)> ValidateRefreshToken(HttpContext context)
+    private async Task<string> ValidateRefreshToken(HttpContext context)
     {
         if (!context.Request.Headers.TryGetValue(RefreshTokenHeader, out var token) || string.IsNullOrEmpty(token))
-            return (false, null);
+            return string.Empty;
         var validateToken = await GetValidatedToken(token!, RefreshTokenKey);
         if (validateToken is null)
-            return (false, null);
+            return string.Empty;
 
         var user = AuthService.Tokens.FirstOrDefault(e => e.Key.Equals(token));
         if (user.Value is null)
-            return (false, null);
+            return string.Empty;
 
         var accessToken = GenerateAccessToken(user.Value);
         context.Response.Headers.TryAdd(AccessTokenHeader, accessToken);
-        return (true, validateToken);
+        return accessToken;
     }
 
-    private async Task<(bool, JsonWebToken?)> ValidateAccessToken(HttpContext context)
+    private async Task<string> ValidateAccessToken(HttpContext context)
     {
         if (!context.Request.Headers.TryGetValue(AccessTokenHeader, out var token) || string.IsNullOrEmpty(token))
-            return (false, null);
+            return  string.Empty;
         var validateToken = await GetValidatedToken(token!, AccessTokenKey);
-        return (validateToken != null, validateToken);
+        return validateToken != null ? token.ToString() : string.Empty;
     }
 
     private async Task<JsonWebToken?> GetValidatedToken(string token, byte[] key)
     {
-        var tokenHandler = new JsonWebTokenHandler();
         try
         {
-            var validatedToken = await tokenHandler.ValidateTokenAsync(token, new TokenValidationParameters()
-            {
-                ValidateIssuerSigningKey = true,
-                IssuerSigningKey = new SymmetricSecurityKey(key),
-                ValidateIssuer = false,
-                ValidateAudience = false,
-                ClockSkew = TimeSpan.Zero
-
-            });
+            var validatedToken = await _tokenHandler.ValidateTokenAsync(token, GetValidationParameters(key, true));
             
             var jwtToken = (JsonWebToken)validatedToken.SecurityToken;
             return jwtToken;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static TokenValidationParameters GetValidationParameters(byte[] key, bool validateLifetime)
+    {
+        return new TokenValidationParameters
+        {
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = new SymmetricSecurityKey(key),
+            ValidateIssuer = false,
+            ValidateAudience = false,
+            ValidateLifetime = validateLifetime,
+            ClockSkew = TimeSpan.Zero
+
+        };
+    }
+
+    public async Task<ClaimsPrincipal?> GetClaimsPrincipalFromToken(string token)
+    {
+        try
+        {
+            var result = await _tokenHandler.ValidateTokenAsync(token, GetValidationParameters(AccessTokenKey, false));
+            return new ClaimsPrincipal(result.ClaimsIdentity);
         }
         catch
         {
@@ -90,8 +109,8 @@ public class TokenService
             Expires = expiration,
             SigningCredentials = signingCredentials,
         };
-        var tokenHandler = new JwtSecurityTokenHandler();
-        var token = tokenHandler.CreateJwtSecurityToken(tokenDescriptor);
-        return tokenHandler.WriteToken(token);
+       
+        var token = _tokenHandler.CreateToken(tokenDescriptor);
+        return token;
     }
 }
